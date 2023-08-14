@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include <IOKit/serial/ioss.h>
 #include <SDL.h>
+#include <chrono>
 #include <errno.h>
 #include <fcntl.h>
 #include <fstream>
@@ -13,12 +14,16 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <thread>
 #include <unistd.h>
+
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <SDL_opengles2.h>
 #else
 #include <SDL_opengl.h>
 #endif
+
+#include "Piano.h"
 
 #define OUTPUT_BUFFER_SIZE 0
 #define INPUT_BUFFER_SIZE 10
@@ -94,10 +99,39 @@ unsigned char pianoPatch[] = {
     0xBE, 0x32, 0xF9, 0xB4, 0x32, 0xBE, 0x32, 0xF1, 0xB4, 0x51, 0xBE, 0x51,
     0xF9, 0xB5, 0x00, 0xF1, 0xB5, 0x00};
 
+unsigned char initU[] = {0xF9, 0xF9, 0xF9, 0xF9, 0xF9, 0xF9, 0xF9, 0xF9};
+unsigned char initL[] = {0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1};
 unsigned char noteOn[] = {0xF9, 0xC0, 0x48, 0x74, 0xF1, 0xC0, 0x48, 0x74};
 unsigned char noteOff[] = {0xF9, 0xD0, 0x48, 0x74, 0xF1, 0xD0, 0x48, 0x74};
+unsigned char cChange[] = {0xF4, 0xD0, 0x48};
+
+struct VoiceState {
+  bool on = false;
+  std::time_t timestamp;
+  int noteId;
+  int velocity;
+};
+VoiceState voicesStateU[6];
+VoiceState voicesStateL[6];
+
+int lastBoardSelected = 0x00;
+
+bool done = false;
+int fd;
+
+Piano piano;
+
+void synthLoop();
 
 int main(int argc, char *argv[]) {
+  fd = open(argv[1], O_RDWR | O_NOCTTY | O_NDELAY);
+  if (fd == -1) {
+    printf("Device cannot be opened.\n");
+    exit(-1);
+  }
+
+  std::thread synthThread(synthLoop);
+
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
     return 1;
   }
@@ -162,51 +196,8 @@ int main(int argc, char *argv[]) {
   ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
-  int fd = open(argv[1], O_RDWR | O_NOCTTY | O_NDELAY);
-  if (fd == -1) {
-    printf("Device cannot be opened.\n");
-    exit(-1);
-  }
-  struct termios options;
-  fcntl(fd, F_SETFL, FNDELAY);
-  tcgetattr(fd, &options);          // Get the current options of the port
-  bzero(&options, sizeof(options)); // Clear all the options
-  // Configure the device : 8 bits, no parity, no control
-  options.c_cflag |= (CLOCAL | CREAD | CS8);
-  options.c_iflag |= (IGNPAR | IGNBRK);
-  options.c_cc[VTIME] = 0; // Timer unused
-  options.c_cc[VMIN] = 0;  // At least on character before satisfy reading
-  tcsetattr(fd, TCSANOW, &options);
-
-  speed_t baud = 31250;
-  ioctl(fd, IOSSIOSPEED, &baud);
-
-  write(fd, pianoPatch, sizeof(pianoPatch));
-
-  Pm_Initialize();
-
-  int in_id = Pm_CreateVirtualInput("MKS-70", NULL, NULL);
-  int out_id = Pm_CreateVirtualOutput("MKS-70", NULL, NULL);
-
-  PmEvent buffer[1];
-  PmStream *out;
-  PmStream *in;
-  Pm_OpenInput(&in, in_id, NULL, 0, NULL, NULL);
-  Pm_OpenOutput(&out, out_id, NULL, OUTPUT_BUFFER_SIZE, TIME_PROC, TIME_INFO,
-                0);
-  printf("Created/Opened input %d and output %d\n", in_id, out_id);
-  Pm_SetFilter(in, PM_FILT_ACTIVE | PM_FILT_CLOCK | PM_FILT_SYSEX);
-
-  // Empty the buffer, just in case anything got through
-  while (Pm_Poll(in)) {
-    Pm_Read(in, buffer, 1);
-  }
-
-  bool show_demo_window = true;
-  bool show_another_window = false;
   ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-  bool done = false;
   while (!done) {
     // Poll and handle events (inputs, window resize, etc.)
     // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to
@@ -233,55 +224,10 @@ int main(int argc, char *argv[]) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    // 1. Show the big demo window (Most of the sample code is in
-    // ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear
-    // ImGui!).
-    if (show_demo_window)
-      ImGui::ShowDemoWindow(&show_demo_window);
+    piano.draw();
 
-    // 2. Show a simple window that we create ourselves. We use a Begin/End pair
-    // to create a named window.
     {
-      static float f = 0.0f;
-      static int counter = 0;
-
-      ImGui::Begin("Hello, world!"); // Create a window called "Hello, world!"
-                                     // and append into it.
-
-      ImGui::Text("This is some useful text."); // Display some text (you can
-                                                // use a format strings too)
-      ImGui::Checkbox(
-          "Demo Window",
-          &show_demo_window); // Edit bools storing our window open/close state
-      ImGui::Checkbox("Another Window", &show_another_window);
-
-      ImGui::SliderFloat("float", &f, 0.0f,
-                         1.0f); // Edit 1 float using a slider from 0.0f to 1.0f
-      ImGui::ColorEdit3(
-          "clear color",
-          (float *)&clear_color); // Edit 3 floats representing a color
-
-      if (ImGui::Button("Button")) // Buttons return true when clicked (most
-                                   // widgets return true when edited/activated)
-        counter++;
-      ImGui::SameLine();
-      ImGui::Text("counter = %d", counter);
-
-      ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-                  1000.0f / io.Framerate, io.Framerate);
-      ImGui::End();
-    }
-
-    // 3. Show another simple window.
-    if (show_another_window) {
-      ImGui::Begin(
-          "Another Window",
-          &show_another_window); // Pass a pointer to our bool variable (the
-                                 // window will have a closing button that will
-                                 // clear the bool when clicked)
-      ImGui::Text("Hello from another window!");
-      if (ImGui::Button("Close Me"))
-        show_another_window = false;
+      ImGui::Begin("Hello, world!");
       ImGui::End();
     }
 
@@ -293,33 +239,9 @@ int main(int argc, char *argv[]) {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(window);
-
-    // Read from virtual port
-    int length = Pm_Read(in, buffer, 1);
-    if (length > 0) {
-      for (size_t i = 0; i < length; i++) {
-        printf("Got message: time %ld, %2lx %2lx %2lx\n",
-               (long)buffer[0].timestamp,
-               (long)Pm_MessageStatus(buffer[0].message),
-               (long)Pm_MessageData1(buffer[0].message),
-               (long)Pm_MessageData2(buffer[0].message));
-
-        if (Pm_MessageStatus(buffer[0].message) == 0x90) {
-          noteOn[2] = Pm_MessageData1(buffer[0].message);
-          noteOn[6] = Pm_MessageData1(buffer[0].message);
-          noteOn[3] = Pm_MessageData2(buffer[0].message);
-          noteOn[7] = Pm_MessageData2(buffer[0].message);
-          write(fd, noteOn, sizeof(noteOn));
-        } else if (Pm_MessageStatus(buffer[0].message) == 0x80) {
-          noteOff[2] = Pm_MessageData1(buffer[0].message);
-          noteOff[6] = Pm_MessageData1(buffer[0].message);
-          noteOff[3] = Pm_MessageData2(buffer[0].message);
-          noteOff[7] = Pm_MessageData2(buffer[0].message);
-          write(fd, noteOff, sizeof(noteOff));
-        }
-      }
-    }
   }
+
+  synthThread.join();
 
   // Cleanup
   ImGui_ImplOpenGL3_Shutdown();
@@ -333,4 +255,172 @@ int main(int argc, char *argv[]) {
   Pm_Terminate();
 
   return 0;
+}
+
+void synthLoop() {
+  struct termios options;
+  fcntl(fd, F_SETFL, FNDELAY);
+  tcgetattr(fd, &options);          // Get the current options of the port
+  bzero(&options, sizeof(options)); // Clear all the options
+  // Configure the device : 8 bits, no parity, no control
+  options.c_cflag |= (CLOCAL | CREAD | CS8);
+  options.c_iflag |= (IGNPAR | IGNBRK);
+  options.c_cc[VTIME] = 0; // Timer unused
+  options.c_cc[VMIN] = 0;  // At least on character before satisfy reading
+  tcsetattr(fd, TCSANOW, &options);
+
+  speed_t baud = 31250;
+  // speed_t baud = 38400;
+  ioctl(fd, IOSSIOSPEED, &baud);
+
+  write(fd, initL, sizeof(initL));
+  write(fd, initU, sizeof(initU));
+  write(fd, pianoPatch, sizeof(pianoPatch));
+
+  Pm_Initialize();
+
+  int in_id = Pm_CreateVirtualInput("MKS-70", NULL, NULL);
+  int out_id = Pm_CreateVirtualOutput("MKS-70", NULL, NULL);
+
+  PmEvent buffer[1];
+  PmStream *out;
+  PmStream *in;
+  Pm_OpenInput(&in, in_id, NULL, 0, NULL, NULL);
+  Pm_OpenOutput(&out, out_id, NULL, OUTPUT_BUFFER_SIZE, TIME_PROC, TIME_INFO,
+                0);
+  printf("Created/Opened input %d and output %d\n", in_id, out_id);
+  Pm_SetFilter(in, PM_FILT_ACTIVE | PM_FILT_CLOCK | PM_FILT_SYSEX);
+
+  // Empty the buffer, just in case anything got through
+  while (Pm_Poll(in)) {
+    Pm_Read(in, buffer, 1);
+  }
+
+  while (!done) {
+    // Read from virtual port
+    int length = Pm_Read(in, buffer, 1);
+    if (length > 0) {
+      for (size_t i = 0; i < length; i++) {
+        // printf("Got message: time %ld, %2lx %2lx %2lx\n",
+        //        (long)buffer[i].timestamp,
+        //        (long)Pm_MessageStatus(buffer[i].message),
+        //        (long)Pm_MessageData1(buffer[i].message),
+        //        (long)Pm_MessageData2(buffer[i].message));
+
+        if (Pm_MessageStatus(buffer[i].message) == 0x90) {
+          piano.down(Pm_MessageData1(buffer[i].message),
+                     Pm_MessageData2(buffer[i].message));
+
+          int freeVoiceIL = -1;
+          int freeVoiceIU = -1;
+          for (size_t j = 0; j < 6; j++) {
+            if (!voicesStateL[j].on) {
+              freeVoiceIL = j;
+              break;
+            }
+          }
+          for (size_t j = 0; j < 6; j++) {
+            if (!voicesStateU[j].on) {
+              freeVoiceIU = j;
+              break;
+            }
+          }
+          if (freeVoiceIL == -1 || freeVoiceIU == -1) {
+            freeVoiceIL = 0;
+            freeVoiceIU = 0;
+          }
+
+          voicesStateL[freeVoiceIL].on = true;
+          voicesStateL[freeVoiceIL].timestamp = std::time(0);
+          voicesStateL[freeVoiceIL].noteId = Pm_MessageData1(buffer[i].message);
+          voicesStateL[freeVoiceIL].velocity =
+              Pm_MessageData2(buffer[i].message);
+          voicesStateU[freeVoiceIU].on = true;
+          voicesStateU[freeVoiceIU].timestamp = std::time(0);
+          voicesStateU[freeVoiceIU].noteId = Pm_MessageData1(buffer[i].message);
+          voicesStateU[freeVoiceIU].velocity =
+              Pm_MessageData2(buffer[i].message);
+
+          noteOn[1] = 0xC0 | (freeVoiceIL & 0x0F);
+          noteOn[5] = 0xC0 | (freeVoiceIU & 0x0F);
+
+          noteOn[2] = Pm_MessageData1(buffer[i].message);
+          noteOn[6] = Pm_MessageData1(buffer[i].message);
+          noteOn[3] = Pm_MessageData2(buffer[i].message);
+          noteOn[7] = Pm_MessageData2(buffer[i].message);
+
+          write(fd, noteOn, sizeof(noteOn));
+          lastBoardSelected = 0x00;
+        } else if (Pm_MessageStatus(buffer[i].message) == 0x80) {
+          piano.up(Pm_MessageData1(buffer[i].message));
+
+          int foundVoiceIL = -1;
+          int foundVoiceIU = -1;
+          for (size_t j = 0; j < 6; j++) {
+            if (voicesStateL[j].noteId == Pm_MessageData1(buffer[i].message)) {
+              foundVoiceIL = j;
+              break;
+            }
+          }
+          for (size_t j = 0; j < 6; j++) {
+            if (voicesStateU[j].noteId == Pm_MessageData1(buffer[i].message)) {
+              foundVoiceIU = j;
+              break;
+            }
+          }
+
+          if (foundVoiceIL != -1 && foundVoiceIU != -1) {
+            voicesStateL[foundVoiceIL].on = false;
+            voicesStateU[foundVoiceIU].on = false;
+
+            noteOff[1] = 0xD0 | (foundVoiceIL & 0x0F);
+            noteOff[5] = 0xD0 | (foundVoiceIU & 0x0F);
+
+            noteOff[2] = Pm_MessageData1(buffer[i].message);
+            noteOff[6] = Pm_MessageData1(buffer[i].message);
+
+            noteOff[3] = Pm_MessageData2(buffer[i].message);
+            noteOff[7] = Pm_MessageData2(buffer[i].message);
+
+            write(fd, noteOff, sizeof(noteOff));
+            lastBoardSelected = 0x00;
+          }
+        } else if (Pm_MessageStatus(buffer[i].message) == 0xB0) {
+          int controlChange = Pm_MessageData1(buffer[i].message);
+          if (controlChange == 0x40)
+            controlChange = 0xBB; // Sustain
+          else if (controlChange == 0x01)
+            controlChange = 0xBC; // Modulation
+
+          cChange[1] = controlChange;
+          cChange[2] = Pm_MessageData2(buffer[i].message);
+
+          if (lastBoardSelected == 0xF4) {
+            write(fd, cChange + 1, sizeof(cChange) - 1);
+          } else {
+            write(fd, cChange, sizeof(cChange));
+          }
+          lastBoardSelected = 0xF4;
+        } else if (Pm_MessageStatus(buffer[i].message) == 0xE0) {
+          printf("%02x\n", Pm_MessageData2(buffer[i].message));
+
+          // Bend value
+          cChange[1] = 0xB2;
+          cChange[2] = abs((int)Pm_MessageData2(buffer[i].message) - 0x40) * 2;
+
+          if (lastBoardSelected == 0xF4) {
+            write(fd, cChange + 1, sizeof(cChange) - 1);
+          } else {
+            write(fd, cChange, sizeof(cChange));
+          }
+          lastBoardSelected = 0xF4;
+
+          // Bend polarity
+          cChange[1] = 0xBF;
+          cChange[2] = Pm_MessageData2(buffer[i].message) > 0x40 ? 0x7F : 0x00;
+          write(fd, cChange + 1, sizeof(cChange) - 1);
+        }
+      }
+    }
+  }
 }

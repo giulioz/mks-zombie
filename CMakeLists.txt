@@ -19,7 +19,10 @@ include_directories(${PORTMIDI_INCLUDE_DIR})
 # include_directories(${IMGUI_INCLUDE_DIR})
 include_directories("../imgui")
 
-set(SOURCE_FILES "src/main.cpp")
+set(SOURCE_FILES
+	"src/main.cpp"
+	"src/Piano.cpp"
+)
 
 add_executable(mkszombie 
 	${SOURCE_FILES}
