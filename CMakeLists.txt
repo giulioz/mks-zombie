@@ -21,6 +21,7 @@ include_directories("../imgui")
 
 set(SOURCE_FILES
 	"src/main.cpp"
+	"src/SynthEngine.cpp"
 	"src/Piano.cpp"
 )
 
