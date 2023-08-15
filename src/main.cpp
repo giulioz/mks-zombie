@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <portmidi.h>
 #include <porttime.h>
 #include <stdio.h>
@@ -104,6 +105,61 @@ unsigned char initL[] = {0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1};
 unsigned char noteOn[] = {0xF9, 0xC0, 0x48, 0x74, 0xF1, 0xC0, 0x48, 0x74};
 unsigned char noteOff[] = {0xF9, 0xD0, 0x48, 0x74, 0xF1, 0xD0, 0x48, 0x74};
 unsigned char cChange[] = {0xF4, 0xD0, 0x48};
+unsigned char paramChange[] = {0xF9, 0x80, 0x00};
+
+struct Tone {
+  int DCO1_RAN;
+  int DCO1_WF;
+  int DCO1_TUN;
+  int DCO1_LFO;
+  int DCO1_ENV;
+  int DCO2_RAN;
+  int DCO2_WF;
+  int XMOD;
+  int DCO2_TUN;
+  int DCO2_FTU;
+  int DCO2_LFO;
+  int DCO2_ENV;
+  int ATOUCH_VIB;
+  int ATOUCH_BRI;
+  int ATOUCH_VOL;
+  int DCO_DYNA;
+  int DCO_MODE;
+  int MIX_DCO1;
+  int MIX_DCO2;
+  int MIX_ENV;
+  int MIX_DYNA;
+  int MIX_MODE;
+  int HPF_FREQ;
+  int VCF_FREQ;
+  int VCF_RES;
+  int VCF_LFO;
+  int VCF_ENV;
+  int VCF_KEY;
+  int VCF_DYNA;
+  int VCF_MODE;
+  int VCA_LEVE;
+  int VCA_DYNA;
+  int CHORUS;
+  int LFO_WF;
+  int LFO_DELA;
+  int LFO_RATE;
+  int ENV1_ATT;
+  int ENV1_DEC;
+  int ENV1_SUS;
+  int ENV1_REL;
+  int ENV1_KEY;
+  int ENV2_ATT;
+  int ENV2_DEC;
+  int ENV2_SUS;
+  int ENV2_REL;
+  int ENV2_KEY;
+  int UNK_0xAE;
+  int VCA_MODE;
+};
+
+Tone toneU = {0};
+Tone toneL = {0};
 
 struct VoiceState {
   bool on = false;
@@ -118,10 +174,12 @@ int lastBoardSelected = 0x00;
 
 bool done = false;
 int fd;
+std::mutex fdMutex;
 
 Piano piano;
 
 void synthLoop();
+void paramSlider(const char *name, int *ptr, unsigned char id, int board);
 
 int main(int argc, char *argv[]) {
   fd = open(argv[1], O_RDWR | O_NOCTTY | O_NDELAY);
@@ -227,7 +285,107 @@ int main(int argc, char *argv[]) {
     piano.draw();
 
     {
-      ImGui::Begin("Hello, world!");
+      ImGui::Begin("Params U");
+      paramSlider("DCO1_RAN", &toneU.DCO1_RAN, 0x80, 0xF9);
+      paramSlider("DCO1_WF", &toneU.DCO1_WF, 0x81, 0xF9);
+      paramSlider("DCO1_TUN", &toneU.DCO1_TUN, 0x82, 0xF9);
+      paramSlider("DCO1_LFO", &toneU.DCO1_LFO, 0x83, 0xF9);
+      paramSlider("DCO1_ENV", &toneU.DCO1_ENV, 0x84, 0xF9);
+      paramSlider("DCO2_RAN", &toneU.DCO2_RAN, 0x85, 0xF9);
+      paramSlider("DCO2_WF", &toneU.DCO2_WF, 0x86, 0xF9);
+      paramSlider("XMOD", &toneU.XMOD, 0x87, 0xF9);
+      paramSlider("DCO2_TUN", &toneU.DCO2_TUN, 0x88, 0xF9);
+      paramSlider("DCO2_FTU", &toneU.DCO2_FTU, 0x89, 0xF9);
+      paramSlider("DCO2_LFO", &toneU.DCO2_LFO, 0x8A, 0xF9);
+      paramSlider("DCO2_ENV", &toneU.DCO2_ENV, 0x8B, 0xF9);
+      paramSlider("ATOUCH_VIB", &toneU.ATOUCH_VIB, 0x8C, 0xF9);
+      paramSlider("ATOUCH_BRI", &toneU.ATOUCH_BRI, 0x8D, 0xF9);
+      paramSlider("ATOUCH_VOL", &toneU.ATOUCH_VOL, 0x8E, 0xF9);
+      paramSlider("DCO_DYNA", &toneU.DCO_DYNA, 0x8F, 0xF9);
+      paramSlider("DCO_MODE", &toneU.DCO_MODE, 0x90, 0xF9);
+      paramSlider("MIX_DCO1", &toneU.MIX_DCO1, 0x91, 0xF9);
+      paramSlider("MIX_DCO2", &toneU.MIX_DCO2, 0x92, 0xF9);
+      paramSlider("MIX_ENV", &toneU.MIX_ENV, 0x93, 0xF9);
+      paramSlider("MIX_DYNA", &toneU.MIX_DYNA, 0x94, 0xF9);
+      paramSlider("MIX_MODE", &toneU.MIX_MODE, 0x95, 0xF9);
+      paramSlider("HPF_FREQ", &toneU.HPF_FREQ, 0x96, 0xF9);
+      paramSlider("VCF_FREQ", &toneU.VCF_FREQ, 0x97, 0xF9);
+      paramSlider("VCF_RES", &toneU.VCF_RES, 0x98, 0xF9);
+      paramSlider("VCF_LFO", &toneU.VCF_LFO, 0x99, 0xF9);
+      paramSlider("VCF_ENV", &toneU.VCF_ENV, 0x9A, 0xF9);
+      paramSlider("VCF_KEY", &toneU.VCF_KEY, 0x9B, 0xF9);
+      paramSlider("VCF_DYNA", &toneU.VCF_DYNA, 0x9C, 0xF9);
+      paramSlider("VCF_MODE", &toneU.VCF_MODE, 0x9D, 0xF9);
+      paramSlider("VCA_LEVE", &toneU.VCA_LEVE, 0x9E, 0xF9);
+      paramSlider("VCA_DYNA", &toneU.VCA_DYNA, 0x9F, 0xF9);
+      paramSlider("CHORUS", &toneU.CHORUS, 0xA0, 0xF9);
+      paramSlider("LFO_WF", &toneU.LFO_WF, 0xA1, 0xF9);
+      paramSlider("LFO_DELA", &toneU.LFO_DELA, 0xA2, 0xF9);
+      paramSlider("LFO_RATE", &toneU.LFO_RATE, 0xA3, 0xF9);
+      paramSlider("ENV1_ATT", &toneU.ENV1_ATT, 0xA4, 0xF9);
+      paramSlider("ENV1_DEC", &toneU.ENV1_DEC, 0xA5, 0xF9);
+      paramSlider("ENV1_SUS", &toneU.ENV1_SUS, 0xA6, 0xF9);
+      paramSlider("ENV1_REL", &toneU.ENV1_REL, 0xA7, 0xF9);
+      paramSlider("ENV1_KEY", &toneU.ENV1_KEY, 0xA8, 0xF9);
+      paramSlider("ENV2_ATT", &toneU.ENV2_ATT, 0xA9, 0xF9);
+      paramSlider("ENV2_DEC", &toneU.ENV2_DEC, 0xAA, 0xF9);
+      paramSlider("ENV2_SUS", &toneU.ENV2_SUS, 0xAB, 0xF9);
+      paramSlider("ENV2_REL", &toneU.ENV2_REL, 0xAC, 0xF9);
+      paramSlider("ENV2_KEY", &toneU.ENV2_KEY, 0xAD, 0xF9);
+      paramSlider("UNK_0xAE", &toneU.UNK_0xAE, 0xAE, 0xF9);
+      paramSlider("VCA_MODE", &toneU.VCA_MODE, 0xAF, 0xF9);
+      ImGui::End();
+    }
+    {
+      ImGui::Begin("Params L");
+      paramSlider("DCO1_RAN", &toneL.DCO1_RAN, 0x80, 0xF1);
+      paramSlider("DCO1_WF", &toneL.DCO1_WF, 0x81, 0xF1);
+      paramSlider("DCO1_TUN", &toneL.DCO1_TUN, 0x82, 0xF1);
+      paramSlider("DCO1_LFO", &toneL.DCO1_LFO, 0x83, 0xF1);
+      paramSlider("DCO1_ENV", &toneL.DCO1_ENV, 0x84, 0xF1);
+      paramSlider("DCO2_RAN", &toneL.DCO2_RAN, 0x85, 0xF1);
+      paramSlider("DCO2_WF", &toneL.DCO2_WF, 0x86, 0xF1);
+      paramSlider("XMOD", &toneL.XMOD, 0x87, 0xF1);
+      paramSlider("DCO2_TUN", &toneL.DCO2_TUN, 0x88, 0xF1);
+      paramSlider("DCO2_FTU", &toneL.DCO2_FTU, 0x89, 0xF1);
+      paramSlider("DCO2_LFO", &toneL.DCO2_LFO, 0x8A, 0xF1);
+      paramSlider("DCO2_ENV", &toneL.DCO2_ENV, 0x8B, 0xF1);
+      paramSlider("ATOUCH_VIB", &toneL.ATOUCH_VIB, 0x8C, 0xF1);
+      paramSlider("ATOUCH_BRI", &toneL.ATOUCH_BRI, 0x8D, 0xF1);
+      paramSlider("ATOUCH_VOL", &toneL.ATOUCH_VOL, 0x8E, 0xF1);
+      paramSlider("DCO_DYNA", &toneL.DCO_DYNA, 0x8F, 0xF1);
+      paramSlider("DCO_MODE", &toneL.DCO_MODE, 0x90, 0xF1);
+      paramSlider("MIX_DCO1", &toneL.MIX_DCO1, 0x91, 0xF1);
+      paramSlider("MIX_DCO2", &toneL.MIX_DCO2, 0x92, 0xF1);
+      paramSlider("MIX_ENV", &toneL.MIX_ENV, 0x93, 0xF1);
+      paramSlider("MIX_DYNA", &toneL.MIX_DYNA, 0x94, 0xF1);
+      paramSlider("MIX_MODE", &toneL.MIX_MODE, 0x95, 0xF1);
+      paramSlider("HPF_FREQ", &toneL.HPF_FREQ, 0x96, 0xF1);
+      paramSlider("VCF_FREQ", &toneL.VCF_FREQ, 0x97, 0xF1);
+      paramSlider("VCF_RES", &toneL.VCF_RES, 0x98, 0xF1);
+      paramSlider("VCF_LFO", &toneL.VCF_LFO, 0x99, 0xF1);
+      paramSlider("VCF_ENV", &toneL.VCF_ENV, 0x9A, 0xF1);
+      paramSlider("VCF_KEY", &toneL.VCF_KEY, 0x9B, 0xF1);
+      paramSlider("VCF_DYNA", &toneL.VCF_DYNA, 0x9C, 0xF1);
+      paramSlider("VCF_MODE", &toneL.VCF_MODE, 0x9D, 0xF1);
+      paramSlider("VCA_LEVE", &toneL.VCA_LEVE, 0x9E, 0xF1);
+      paramSlider("VCA_DYNA", &toneL.VCA_DYNA, 0x9F, 0xF1);
+      paramSlider("CHORUS", &toneL.CHORUS, 0xA0, 0xF1);
+      paramSlider("LFO_WF", &toneL.LFO_WF, 0xA1, 0xF1);
+      paramSlider("LFO_DELA", &toneL.LFO_DELA, 0xA2, 0xF1);
+      paramSlider("LFO_RATE", &toneL.LFO_RATE, 0xA3, 0xF1);
+      paramSlider("ENV1_ATT", &toneL.ENV1_ATT, 0xA4, 0xF1);
+      paramSlider("ENV1_DEC", &toneL.ENV1_DEC, 0xA5, 0xF1);
+      paramSlider("ENV1_SUS", &toneL.ENV1_SUS, 0xA6, 0xF1);
+      paramSlider("ENV1_REL", &toneL.ENV1_REL, 0xA7, 0xF1);
+      paramSlider("ENV1_KEY", &toneL.ENV1_KEY, 0xA8, 0xF1);
+      paramSlider("ENV2_ATT", &toneL.ENV2_ATT, 0xA9, 0xF1);
+      paramSlider("ENV2_DEC", &toneL.ENV2_DEC, 0xAA, 0xF1);
+      paramSlider("ENV2_SUS", &toneL.ENV2_SUS, 0xAB, 0xF1);
+      paramSlider("ENV2_REL", &toneL.ENV2_REL, 0xAC, 0xF1);
+      paramSlider("ENV2_KEY", &toneL.ENV2_KEY, 0xAD, 0xF1);
+      paramSlider("UNK_0xAE", &toneL.UNK_0xAE, 0xAE, 0xF1);
+      paramSlider("VCA_MODE", &toneL.VCA_MODE, 0xAF, 0xF1);
       ImGui::End();
     }
 
@@ -255,6 +413,17 @@ int main(int argc, char *argv[]) {
   Pm_Terminate();
 
   return 0;
+}
+
+void paramSlider(const char *name, int *ptr, unsigned char id, int board) {
+  bool changed = ImGui::SliderInt(name, ptr, 0, 127);
+  if (changed) {
+    paramChange[0] = board;
+    paramChange[1] = id;
+    paramChange[2] = *ptr;
+    std::scoped_lock lock(fdMutex);
+    write(fd, paramChange, sizeof(paramChange));
+  }
 }
 
 void synthLoop() {
@@ -349,6 +518,7 @@ void synthLoop() {
           noteOn[3] = Pm_MessageData2(buffer[i].message);
           noteOn[7] = Pm_MessageData2(buffer[i].message);
 
+          std::scoped_lock lock(fdMutex);
           write(fd, noteOn, sizeof(noteOn));
           lastBoardSelected = 0x00;
         } else if (Pm_MessageStatus(buffer[i].message) == 0x80) {
@@ -382,6 +552,7 @@ void synthLoop() {
             noteOff[3] = Pm_MessageData2(buffer[i].message);
             noteOff[7] = Pm_MessageData2(buffer[i].message);
 
+            std::scoped_lock lock(fdMutex);
             write(fd, noteOff, sizeof(noteOff));
             lastBoardSelected = 0x00;
           }
@@ -395,6 +566,7 @@ void synthLoop() {
           cChange[1] = controlChange;
           cChange[2] = Pm_MessageData2(buffer[i].message);
 
+          std::scoped_lock lock(fdMutex);
           if (lastBoardSelected == 0xF4) {
             write(fd, cChange + 1, sizeof(cChange) - 1);
           } else {
@@ -402,8 +574,7 @@ void synthLoop() {
           }
           lastBoardSelected = 0xF4;
         } else if (Pm_MessageStatus(buffer[i].message) == 0xE0) {
-          printf("%02x\n", Pm_MessageData2(buffer[i].message));
-
+          std::scoped_lock lock(fdMutex);
           // Bend value
           cChange[1] = 0xB2;
           cChange[2] = abs((int)Pm_MessageData2(buffer[i].message) - 0x40) * 2;
