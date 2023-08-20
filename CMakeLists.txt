@@ -13,10 +13,7 @@ if(APPLE)
 endif()
 
 add_subdirectory(deps/portmidi)
-include_directories(${PORTMIDI_INCLUDE_DIR})
-
 add_subdirectory(deps/nativefiledialog-extended)
-
 include_directories(deps/serial/include)
 
 set(SOURCE_FILES
@@ -57,7 +54,7 @@ list(APPEND CMAKE_MODULE_PATH ${HELLOIMGUI_CMAKE_PATH})
 include(hello_imgui_add_app)
 hello_imgui_add_app(mkszombie ${SOURCE_FILES} ${SERIAL_SOURCE_FILES})
 
-target_link_libraries(mkszombie PRIVATE ${PORTMIDI_LIBRARY})
+target_link_libraries(mkszombie PRIVATE portmidi)
 target_link_libraries(mkszombie PRIVATE nfd)
 
 if(APPLE)
