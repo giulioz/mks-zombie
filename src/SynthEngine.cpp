@@ -1,16 +1,6 @@
 #include "SynthEngine.h"
 
-#include <IOKit/serial/ioss.h>
-#include <fcntl.h>
-#include <fstream>
-#include <iomanip>
-#include <stdio.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <thread>
-#include <unistd.h>
-
-static unsigned char pianoPatch[] = {
+static unsigned char pianoPatchData[] = {
     0xF4, 0x9E, 0x00, 0xA6, 0x00, 0xA7, 0x00, 0xAB, 0x00, 0xAC, 0x00, 0xF1,
     0x80, 0x60, 0x81, 0x20, 0x82, 0x7F, 0x83, 0x00, 0x84, 0x7F, 0x85, 0x60,
     0x86, 0x20, 0x87, 0x60, 0x88, 0x5C, 0x89, 0x4D, 0x8A, 0x00, 0x8B, 0x00,
@@ -79,20 +69,22 @@ static unsigned char pianoPatch[] = {
     0xBE, 0x32, 0xF9, 0xB4, 0x32, 0xBE, 0x32, 0xF1, 0xB4, 0x51, 0xBE, 0x51,
     0xF9, 0xB5, 0x00, 0xF1, 0xB5, 0x00};
 
-static unsigned char initU[] = {0xF9, 0xF9, 0xF9, 0xF9, 0xF9, 0xF9, 0xF9, 0xF9};
-static unsigned char initL[] = {0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1, 0xF1};
-static unsigned char noteOn[] = {0xF9, 0xC0, 0x48, 0x74,
-                                 0xF1, 0xC0, 0x48, 0x74};
-static unsigned char noteOff[] = {0xF9, 0xD0, 0x48, 0x74,
-                                  0xF1, 0xD0, 0x48, 0x74};
-static unsigned char cChange[] = {0xF4, 0xD0, 0x48};
-static unsigned char paramChange[] = {0xF9, 0x80, 0x00};
+static unsigned char initUData[] = {0xF9, 0xF9, 0xF9, 0xF9,
+                                    0xF9, 0xF9, 0xF9, 0xF9};
+static unsigned char initLData[] = {0xF1, 0xF1, 0xF1, 0xF1,
+                                    0xF1, 0xF1, 0xF1, 0xF1};
+static unsigned char noteOnData[] = {0xF9, 0xC0, 0x48, 0x74,
+                                     0xF1, 0xC0, 0x48, 0x74};
+static unsigned char noteOffData[] = {0xF9, 0xD0, 0x48, 0x74,
+                                      0xF1, 0xD0, 0x48, 0x74};
+static unsigned char cChangeData[] = {0xF4, 0xD0, 0x48};
+static unsigned char paramChangeData[] = {0xF9, 0x80, 0x00};
 
 SynthEngine::SynthEngine() {
   int currentBoard = -1;
   int currentParam = -1;
-  for (size_t i = 0; i < sizeof(pianoPatch); i++) {
-    unsigned char val = pianoPatch[i];
+  for (size_t i = 0; i < sizeof(pianoPatchData); i++) {
+    unsigned char val = pianoPatchData[i];
     if (val >= 0xF0) {
       currentBoard = val;
       currentParam = -1;
@@ -115,11 +107,12 @@ SynthEngine::SynthEngine() {
 SynthEngine::~SynthEngine() {
   running = false;
   synthThreadPtr->join();
+  serialPort->close();
   Pm_Terminate();
 }
 
-bool SynthEngine::init(const char *serialPath) {
-  if (!initSerial(serialPath)) {
+bool SynthEngine::init(const serial::PortInfo &port) {
+  if (!initSerial(port)) {
     return false;
   }
 
@@ -132,31 +125,13 @@ bool SynthEngine::init(const char *serialPath) {
   return true;
 }
 
-bool SynthEngine::initSerial(const char *serialPath) {
-  serialFd = open(serialPath, O_RDWR | O_NOCTTY | O_NDELAY);
-  if (serialFd == -1)
-    return false;
-
-  struct termios options;
-  fcntl(serialFd, F_SETFL, FNDELAY);
-  tcgetattr(serialFd, &options);    // Get the current options of the port
-  bzero(&options, sizeof(options)); // Clear all the options
-  // Configure the device : 8 bits, no parity, no control
-  options.c_cflag |= (CLOCAL | CREAD | CS8);
-  options.c_iflag |= (IGNPAR | IGNBRK);
-  options.c_cc[VTIME] = 0; // Timer unused
-  options.c_cc[VMIN] = 0;  // At least on character before satisfy reading
-  tcsetattr(serialFd, TCSANOW, &options);
-
-  // MacOS specific
-  speed_t baud = 31250;
-  // speed_t baud = 38400;
-  ioctl(serialFd, IOSSIOSPEED, &baud);
+bool SynthEngine::initSerial(const serial::PortInfo &port) {
+  serialPort = std::make_unique<serial::Serial>(port.port, 31250);
 
   // Send init data to the synth
-  write(serialFd, initL, sizeof(initL));
-  write(serialFd, initU, sizeof(initU));
-  write(serialFd, pianoPatch, sizeof(pianoPatch));
+  serialPort->write(initLData, sizeof(initLData));
+  serialPort->write(initUData, sizeof(initUData));
+  serialPort->write(pianoPatchData, sizeof(pianoPatchData));
 
   return true;
 }
@@ -190,62 +165,11 @@ void SynthEngine::threadStart() {
 
     if (Pm_MessageStatus(event.message) == 0x90) {
       // piano.down(Pm_MessageData1(event.message),
-      //            Pm_MessageData2(event.message));
-
-      int freeVoiceIU = getBestNewVoiceId(true);
-      int freeVoiceIL = getBestNewVoiceId(false);
-
-      claimVoice(freeVoiceIU, true, Pm_MessageData1(event.message),
-                 Pm_MessageData2(event.message));
-      claimVoice(freeVoiceIL, false, Pm_MessageData1(event.message),
-                 Pm_MessageData2(event.message));
-
-      noteOn[1] = 0xC0 | (freeVoiceIL & 0x0F);
-      noteOn[5] = 0xC0 | (freeVoiceIU & 0x0F);
-
-      noteOn[2] = Pm_MessageData1(event.message);
-      noteOn[6] = Pm_MessageData1(event.message);
-      noteOn[3] = Pm_MessageData2(event.message);
-      noteOn[7] = Pm_MessageData2(event.message);
-
-      std::scoped_lock lock(serialFdMutex);
-      write(serialFd, noteOn, sizeof(noteOn));
-      lastBoardSelected = 0x00;
+      // Pm_MessageData2(event.message));
+      noteOn(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
     } else if (Pm_MessageStatus(event.message) == 0x80) {
       // piano.up(Pm_MessageData1(event.message));
-
-      int foundVoiceIL = -1;
-      int foundVoiceIU = -1;
-      for (size_t j = 0; j < 6; j++) {
-        if (voicesStateL[j].noteId == Pm_MessageData1(event.message)) {
-          foundVoiceIL = j;
-          break;
-        }
-      }
-      for (size_t j = 0; j < 6; j++) {
-        if (voicesStateU[j].noteId == Pm_MessageData1(event.message)) {
-          foundVoiceIU = j;
-          break;
-        }
-      }
-
-      if (foundVoiceIL != -1 && foundVoiceIU != -1) {
-        voicesStateL[foundVoiceIL].on = false;
-        voicesStateU[foundVoiceIU].on = false;
-
-        noteOff[1] = 0xD0 | (foundVoiceIL & 0x0F);
-        noteOff[5] = 0xD0 | (foundVoiceIU & 0x0F);
-
-        noteOff[2] = Pm_MessageData1(event.message);
-        noteOff[6] = Pm_MessageData1(event.message);
-
-        noteOff[3] = Pm_MessageData2(event.message);
-        noteOff[7] = Pm_MessageData2(event.message);
-
-        std::scoped_lock lock(serialFdMutex);
-        write(serialFd, noteOff, sizeof(noteOff));
-        lastBoardSelected = 0x00;
-      }
+      noteOff(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
     } else if (Pm_MessageStatus(event.message) == 0xB0) {
       int controlChange = Pm_MessageData1(event.message);
       if (controlChange == 0x40)
@@ -253,43 +177,98 @@ void SynthEngine::threadStart() {
       else if (controlChange == 0x01)
         controlChange = 0xBC; // Modulation
 
-      cChange[1] = controlChange;
-      cChange[2] = Pm_MessageData2(event.message);
+      cChangeData[1] = controlChange;
+      cChangeData[2] = Pm_MessageData2(event.message);
 
       std::scoped_lock lock(serialFdMutex);
       if (lastBoardSelected == 0xF4) {
-        write(serialFd, cChange + 1, sizeof(cChange) - 1);
+        serialPort->write(cChangeData + 1, sizeof(cChangeData) - 1);
       } else {
-        write(serialFd, cChange, sizeof(cChange));
+        serialPort->write(cChangeData, sizeof(cChangeData));
       }
       lastBoardSelected = 0xF4;
     } else if (Pm_MessageStatus(event.message) == 0xE0) {
       std::scoped_lock lock(serialFdMutex);
       // Bend value
-      cChange[1] = 0xB2;
-      cChange[2] = abs((int)Pm_MessageData2(event.message) - 0x40) * 2;
+      cChangeData[1] = 0xB2;
+      cChangeData[2] = abs((int)Pm_MessageData2(event.message) - 0x40) * 2;
 
       if (lastBoardSelected == 0xF4) {
-        write(serialFd, cChange + 1, sizeof(cChange) - 1);
+        serialPort->write(cChangeData + 1, sizeof(cChangeData) - 1);
       } else {
-        write(serialFd, cChange, sizeof(cChange));
+        serialPort->write(cChangeData, sizeof(cChangeData));
       }
       lastBoardSelected = 0xF4;
 
       // Bend polarity
-      cChange[1] = 0xBF;
-      cChange[2] = Pm_MessageData2(event.message) > 0x40 ? 0x7F : 0x00;
-      write(serialFd, cChange + 1, sizeof(cChange) - 1);
+      cChangeData[1] = 0xBF;
+      cChangeData[2] = Pm_MessageData2(event.message) > 0x40 ? 0x7F : 0x00;
+      serialPort->write(cChangeData + 1, sizeof(cChangeData) - 1);
     }
   }
 }
 
 void SynthEngine::changeParam(bool upper, int param, int value) {
-  paramChange[0] = upper ? SYNTH_SELECT_UPPER : SYNTH_SELECT_LOWER;
-  paramChange[1] = param;
-  paramChange[2] = value;
+  paramChangeData[0] = upper ? SYNTH_SELECT_UPPER : SYNTH_SELECT_LOWER;
+  paramChangeData[1] = param;
+  paramChangeData[2] = value;
   std::scoped_lock lock(serialFdMutex);
-  write(serialFd, paramChange, sizeof(paramChange));
+  serialPort->write(paramChangeData, sizeof(paramChangeData));
+}
+
+void SynthEngine::noteOn(int note, int velocity) {
+  int freeVoiceIU = getBestNewVoiceId(true);
+  int freeVoiceIL = getBestNewVoiceId(false);
+
+  claimVoice(freeVoiceIU, true, note, velocity);
+  claimVoice(freeVoiceIL, false, note, velocity);
+
+  noteOnData[1] = 0xC0 | (freeVoiceIL & 0x0F);
+  noteOnData[5] = 0xC0 | (freeVoiceIU & 0x0F);
+
+  noteOnData[2] = note;
+  noteOnData[6] = note;
+  noteOnData[3] = velocity;
+  noteOnData[7] = velocity;
+
+  std::scoped_lock lock(serialFdMutex);
+  serialPort->write(noteOnData, sizeof(noteOnData));
+  lastBoardSelected = 0x00;
+}
+
+void SynthEngine::noteOff(int note, int velocity) {
+  int foundVoiceIL = -1;
+  int foundVoiceIU = -1;
+  for (size_t j = 0; j < 6; j++) {
+    if (voicesStateL[j].noteId == note) {
+      foundVoiceIL = j;
+      break;
+    }
+  }
+  for (size_t j = 0; j < 6; j++) {
+    if (voicesStateU[j].noteId == note) {
+      foundVoiceIU = j;
+      break;
+    }
+  }
+
+  if (foundVoiceIL != -1 && foundVoiceIU != -1) {
+    voicesStateL[foundVoiceIL].on = false;
+    voicesStateU[foundVoiceIU].on = false;
+
+    noteOffData[1] = 0xD0 | (foundVoiceIL & 0x0F);
+    noteOffData[5] = 0xD0 | (foundVoiceIU & 0x0F);
+
+    noteOffData[2] = note;
+    noteOffData[6] = note;
+
+    noteOffData[3] = velocity;
+    noteOffData[7] = velocity;
+
+    std::scoped_lock lock(serialFdMutex);
+    serialPort->write(noteOffData, sizeof(noteOffData));
+    lastBoardSelected = 0x00;
+  }
 }
 
 int SynthEngine::getBestNewVoiceId(bool upper) {
@@ -315,8 +294,8 @@ int SynthEngine::getBestNewVoiceId(bool upper) {
 
 void SynthEngine::claimVoice(int voiceId, bool upper, int note, int velocity) {
   auto voiceState = upper ? voicesStateU : voicesStateL;
-  voicesStateL[voiceId].on = true;
-  voicesStateL[voiceId].timestamp = std::time(0);
-  voicesStateL[voiceId].noteId = note;
-  voicesStateL[voiceId].velocity = velocity;
+  voiceState[voiceId].on = true;
+  voiceState[voiceId].timestamp = std::time(0);
+  voiceState[voiceId].noteId = note;
+  voiceState[voiceId].velocity = velocity;
 }

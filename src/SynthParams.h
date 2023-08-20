@@ -61,4 +61,6 @@ struct VoiceState {
   int velocity;
 };
 
+enum PolyMode { Poly1, Poly2, Unison1, Unison2, Mono1, Mono2 };
+
 #endif
