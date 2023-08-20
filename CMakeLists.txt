@@ -12,8 +12,8 @@ if(APPLE)
     find_library(FOUNDATION_LIBRARY Foundation)
 endif()
 
-add_subdirectory(deps/portmidi)
 add_subdirectory(deps/nativefiledialog-extended)
+add_subdirectory(deps/portmidi)
 include_directories(deps/serial/include)
 
 set(SOURCE_FILES

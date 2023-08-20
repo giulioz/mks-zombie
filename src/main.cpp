@@ -98,9 +98,9 @@ void synthInitUI(bool *serialPortInited) {
   std::vector<const char *> serialDevicesNames;
   for (auto &&dev : serialDevices) {
 #ifdef WIN32
-      serialDevicesNames.push_back(dev.description.c_str());
+    serialDevicesNames.push_back(dev.description.c_str());
 #else
-      serialDevicesNames.push_back(dev.port.c_str());
+    serialDevicesNames.push_back(dev.port.c_str());
 #endif
   }
 
@@ -151,7 +151,10 @@ int main(int argc, char *argv[]) {
         ImGui::BeginTable("table1", 3);
 
         ImGui::TableNextColumn();
-        ImGui::Text("Common");
+        ImGui::Text("Patches");
+
+        ImGui::Separator();
+        ImGui::Text("Patch");
 
         int tempVal = 0;
         bool tempBool = 0;
