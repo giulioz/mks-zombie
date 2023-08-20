@@ -7,14 +7,12 @@ else()
 endif()
 set(CMAKE_CXX_STANDARD 20)
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
-
 if(APPLE)
     find_library(IOKIT_LIBRARY IOKit)
     find_library(FOUNDATION_LIBRARY Foundation)
 endif()
 
-find_package(PortMidi REQUIRED)
+add_subdirectory(deps/portmidi)
 include_directories(${PORTMIDI_INCLUDE_DIR})
 
 add_subdirectory(deps/nativefiledialog-extended)

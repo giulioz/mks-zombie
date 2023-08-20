@@ -93,6 +93,32 @@ void toneParams(int dest[], bool upper) {
   paramSlider("UNK_0xAE", &dest[0xAE], 0xAE, upper);
 }
 
+void synthInitUI(bool *serialPortInited) {
+  std::vector<serial::PortInfo> serialDevices = serial::list_ports();
+  std::vector<const char *> serialDevicesNames;
+  for (auto &&dev : serialDevices) {
+    serialDevicesNames.push_back(dev.port.c_str());
+  }
+
+  static int selectedSerialPort = 0;
+
+  if (!*serialPortInited) {
+    ImGui::OpenPopup("Select serial port");
+  }
+
+  if (ImGui::BeginPopupModal("Select serial port", NULL,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::ListBox("##SerialPort", &selectedSerialPort,
+                       serialDevicesNames.data(), serialDevices.size())) {
+      synthEngine.init(serialDevices[selectedSerialPort]);
+      *serialPortInited = true;
+
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+}
+
 int main(int argc, char *argv[]) {
   NFD_Init();
 
@@ -110,34 +136,13 @@ int main(int argc, char *argv[]) {
   //   printf("Error: %s\n", NFD_GetError());
   // }
 
-  std::vector<serial::PortInfo> serialDevices = serial::list_ports();
-  std::vector<const char *> serialDevicesNames;
-  for (auto &&dev : serialDevices) {
-    serialDevicesNames.push_back(dev.port.c_str());
-  }
-
-  int selectedSerialPort = 0;
   bool serialPortInited = false;
 
   HelloImGui::Run(
       [&] {
         // piano.draw();
 
-        if (!serialPortInited) {
-          ImGui::OpenPopup("Select serial port");
-        }
-
-        if (ImGui::BeginPopupModal("Select serial port", NULL,
-                                   ImGuiWindowFlags_AlwaysAutoResize)) {
-          if (ImGui::ListBox("##SerialPort", &selectedSerialPort,
-                             serialDevicesNames.data(), serialDevices.size())) {
-            synthEngine.init(serialDevices[selectedSerialPort]);
-            serialPortInited = true;
-
-            ImGui::CloseCurrentPopup();
-          }
-          ImGui::EndPopup();
-        }
+        synthInitUI(&serialPortInited);
 
         ImGui::BeginTable("table1", 3);
 

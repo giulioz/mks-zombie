@@ -4,3 +4,6 @@
 [submodule "deps/serial"]
 	path = deps/serial
 	url = https://github.com/wjwwood/serial.git
+[submodule "deps/portmidi"]
+	path = deps/portmidi
+	url = https://github.com/PortMidi/portmidi.git
