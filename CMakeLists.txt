@@ -1,6 +1,10 @@
 cmake_minimum_required (VERSION 3.7.2)
 
-project(mkszombie CXX C OBJC)
+if(APPLE)
+    project(mkszombie CXX C OBJC)
+else()
+    project(mkszombie CXX C)
+endif()
 set(CMAKE_CXX_STANDARD 20)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
