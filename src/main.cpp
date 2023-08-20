@@ -97,7 +97,11 @@ void synthInitUI(bool *serialPortInited) {
   std::vector<serial::PortInfo> serialDevices = serial::list_ports();
   std::vector<const char *> serialDevicesNames;
   for (auto &&dev : serialDevices) {
-    serialDevicesNames.push_back(dev.port.c_str());
+#ifdef WIN32
+      serialDevicesNames.push_back(dev.description.c_str());
+#else
+      serialDevicesNames.push_back(dev.port.c_str());
+#endif
   }
 
   static int selectedSerialPort = 0;

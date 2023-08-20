@@ -106,8 +106,12 @@ SynthEngine::SynthEngine() {
 
 SynthEngine::~SynthEngine() {
   running = false;
-  synthThreadPtr->join();
-  serialPort->close();
+  if (synthThreadPtr.get() != nullptr) {
+    synthThreadPtr->join();
+  }
+  if (serialPort.get() != nullptr) {
+      serialPort->close();
+  }
   Pm_Terminate();
 }
 
