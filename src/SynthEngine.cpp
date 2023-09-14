@@ -75,8 +75,8 @@ static unsigned char initLData[] = {0xF1, 0xF1, 0xF1, 0xF1,
                                     0xF1, 0xF1, 0xF1, 0xF1};
 static unsigned char noteOnData[] = {0xF9, 0xC0, 0x48, 0x74,
                                      0xF1, 0xC0, 0x48, 0x74};
-static unsigned char noteOffData[] = {0xF9, 0xD0, 0x48, 0x74,
-                                      0xF1, 0xD0, 0x48, 0x74};
+static unsigned char noteOnDataSingle[] = {0xF9, 0xC0, 0x48, 0x74};
+static unsigned char noteOffDataSingle[] = {0xF9, 0xD0, 0x48, 0x74};
 static unsigned char cChangeData[] = {0xF4, 0xD0, 0x48};
 static unsigned char paramChangeData[] = {0xF9, 0x80, 0x00};
 
@@ -110,7 +110,7 @@ SynthEngine::~SynthEngine() {
     synthThreadPtr->join();
   }
   if (serialPort.get() != nullptr) {
-      serialPort->close();
+    serialPort->close();
   }
   Pm_Terminate();
 }
@@ -167,13 +167,15 @@ void SynthEngine::threadStart() {
       continue;
     }
 
-    if (Pm_MessageStatus(event.message) == 0x90) {
+    if (Pm_MessageStatus(event.message) == 0x80 ||
+        (Pm_MessageStatus(event.message) == 0x90 &&
+         Pm_MessageData2(event.message) == 0)) {
+      // piano.up(Pm_MessageData1(event.message));
+      noteOff(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
+    } else if (Pm_MessageStatus(event.message) == 0x90) {
       // piano.down(Pm_MessageData1(event.message),
       // Pm_MessageData2(event.message));
       noteOn(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
-    } else if (Pm_MessageStatus(event.message) == 0x80) {
-      // piano.up(Pm_MessageData1(event.message));
-      noteOff(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
     } else if (Pm_MessageStatus(event.message) == 0xB0) {
       int controlChange = Pm_MessageData1(event.message);
       if (controlChange == 0x40)
@@ -220,71 +222,123 @@ void SynthEngine::changeParam(bool upper, int param, int value) {
   serialPort->write(paramChangeData, sizeof(paramChangeData));
 }
 
+void SynthEngine::resendAll() {
+  for (size_t i = 0x80; i < 0xB0; i++) {
+    changeParam(true, i, toneU[i]);
+  }
+  if (patchMode == Dual) {
+    for (size_t i = 0x80; i < 0xB0; i++) {
+      changeParam(true, i, toneL[i]);
+    }
+  } else if (patchMode == Whole) {
+    for (size_t i = 0x80; i < 0xB0; i++) {
+      changeParam(false, i, toneU[i]);
+    }
+  }
+}
+
 void SynthEngine::noteOn(int note, int velocity) {
-  int freeVoiceIU = getBestNewVoiceId(true);
-  int freeVoiceIL = getBestNewVoiceId(false);
+  int freeVoiceIU = getBestNewVoiceId(true, note);
+  int freeVoiceIL = getBestNewVoiceId(false, note);
 
-  claimVoice(freeVoiceIU, true, note, velocity);
-  claimVoice(freeVoiceIL, false, note, velocity);
+  if (patchMode == Dual) {
+    claimVoice(freeVoiceIU, true, note, velocity);
+    claimVoice(freeVoiceIL, false, note, velocity);
 
-  noteOnData[1] = 0xC0 | (freeVoiceIL & 0x0F);
-  noteOnData[5] = 0xC0 | (freeVoiceIU & 0x0F);
+    noteOnData[1] = 0xC0 | (freeVoiceIL & 0x0F);
+    noteOnData[5] = 0xC0 | (freeVoiceIU & 0x0F);
 
-  noteOnData[2] = note;
-  noteOnData[6] = note;
-  noteOnData[3] = velocity;
-  noteOnData[7] = velocity;
+    noteOnData[2] = note;
+    noteOnData[6] = note;
+    noteOnData[3] = velocity;
+    noteOnData[7] = velocity;
 
-  std::scoped_lock lock(serialFdMutex);
-  serialPort->write(noteOnData, sizeof(noteOnData));
-  lastBoardSelected = 0x00;
+    std::scoped_lock lock(serialFdMutex);
+    serialPort->write(noteOnData, sizeof(noteOnData));
+    lastBoardSelected = noteOnData[5];
+  } else if (patchMode == Whole) {
+    bool upper = !lastVoiceUpper;
+    int freeVoiceI;
+
+    if (upper) {
+      freeVoiceI = freeVoiceIU;
+      if (voicesStateU[freeVoiceIU].on) {
+        freeVoiceI = freeVoiceIL;
+        upper = false;
+      }
+    } else {
+      freeVoiceI = freeVoiceIL;
+      if (voicesStateL[freeVoiceIL].on) {
+        freeVoiceI = freeVoiceIU;
+        upper = true;
+      }
+    }
+
+    lastVoiceUpper = !lastVoiceUpper;
+
+    claimVoice(freeVoiceI, upper, note, velocity);
+    noteOnDataSingle[0] = upper ? SYNTH_SELECT_UPPER : SYNTH_SELECT_LOWER;
+    noteOnDataSingle[1] = 0xC0 | (freeVoiceI & 0x0F);
+    noteOnDataSingle[2] = note;
+    noteOnDataSingle[3] = velocity;
+    std::scoped_lock lock(serialFdMutex);
+    serialPort->write(noteOnDataSingle, sizeof(noteOnDataSingle));
+    lastBoardSelected = noteOnDataSingle[0];
+  }
 }
 
 void SynthEngine::noteOff(int note, int velocity) {
   int foundVoiceIL = -1;
   int foundVoiceIU = -1;
-  for (size_t j = 0; j < 6; j++) {
+  for (size_t j = 0; j < SYNTH_NVOICES; j++) {
     if (voicesStateL[j].noteId == note) {
       foundVoiceIL = j;
       break;
     }
   }
-  for (size_t j = 0; j < 6; j++) {
+  for (size_t j = 0; j < SYNTH_NVOICES; j++) {
     if (voicesStateU[j].noteId == note) {
       foundVoiceIU = j;
       break;
     }
   }
 
-  if (foundVoiceIL != -1 && foundVoiceIU != -1) {
-    voicesStateL[foundVoiceIL].on = false;
+  if (foundVoiceIU != -1) {
     voicesStateU[foundVoiceIU].on = false;
 
-    noteOffData[1] = 0xD0 | (foundVoiceIL & 0x0F);
-    noteOffData[5] = 0xD0 | (foundVoiceIU & 0x0F);
-
-    noteOffData[2] = note;
-    noteOffData[6] = note;
-
-    noteOffData[3] = velocity;
-    noteOffData[7] = velocity;
+    noteOffDataSingle[0] = SYNTH_SELECT_UPPER;
+    noteOffDataSingle[1] = 0xD0 | (foundVoiceIU & 0x0F);
+    noteOffDataSingle[2] = note;
+    noteOffDataSingle[3] = velocity;
 
     std::scoped_lock lock(serialFdMutex);
-    serialPort->write(noteOffData, sizeof(noteOffData));
-    lastBoardSelected = 0x00;
+    serialPort->write(noteOffDataSingle, sizeof(noteOffDataSingle));
+    lastBoardSelected = SYNTH_SELECT_UPPER;
+  }
+
+  if (foundVoiceIL != -1) {
+    voicesStateL[foundVoiceIL].on = false;
+
+    noteOffDataSingle[0] = SYNTH_SELECT_LOWER;
+    noteOffDataSingle[1] = 0xD0 | (foundVoiceIL & 0x0F);
+    noteOffDataSingle[2] = note;
+    noteOffDataSingle[3] = velocity;
+
+    std::scoped_lock lock(serialFdMutex);
+    serialPort->write(noteOffDataSingle, sizeof(noteOffDataSingle));
+    lastBoardSelected = SYNTH_SELECT_LOWER;
   }
 }
 
-int SynthEngine::getBestNewVoiceId(bool upper) {
+int SynthEngine::getBestNewVoiceId(bool upper, int note) {
   auto voiceState = upper ? voicesStateU : voicesStateL;
 
   for (size_t i = 0; i < SYNTH_NVOICES; i++) {
-    if (!voiceState[i].on) {
+    if (voiceState[i].noteId == note) {
       return i;
     }
   }
 
-  // Not found, steal one
   std::time_t min = std::time(0);
   int iWithMin = 0;
   for (size_t i = 0; i < SYNTH_NVOICES; i++) {
@@ -293,6 +347,18 @@ int SynthEngine::getBestNewVoiceId(bool upper) {
       min = voiceState[i].timestamp;
     }
   }
+
+  if (!voiceState[iWithMin].on) {
+    return iWithMin;
+  }
+
+  for (size_t i = 0; i < SYNTH_NVOICES; i++) {
+    if (!voiceState[i].on) {
+      return i;
+    }
+  }
+
+  // Not found, steal one
   return iWithMin;
 }
 

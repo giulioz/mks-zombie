@@ -62,5 +62,6 @@ struct VoiceState {
 };
 
 enum PolyMode { Poly1, Poly2, Unison1, Unison2, Mono1, Mono2 };
+enum PatchMode { Whole, Dual };
 
 #endif

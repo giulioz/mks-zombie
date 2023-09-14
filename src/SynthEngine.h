@@ -4,8 +4,8 @@
 #include "serial/serial.h"
 #include <chrono>
 #include <mutex>
-#include <thread>
 #include <portmidi.h>
+#include <thread>
 
 #include "SynthParams.h"
 
@@ -22,6 +22,7 @@ public:
   bool init(const serial::PortInfo &port);
 
   void changeParam(bool upper, int param, int value);
+  void resendAll();
 
   int toneU[256] = {0};
   int toneL[256] = {0};
@@ -30,9 +31,11 @@ public:
   VoiceState voicesStateL[SYNTH_NVOICES];
 
   PolyMode polyMode;
+  PatchMode patchMode = Dual;
 
 private:
   int lastBoardSelected = 0x00;
+  bool lastVoiceUpper = false;
 
   std::unique_ptr<serial::Serial> serialPort;
   std::mutex serialFdMutex;
@@ -49,9 +52,8 @@ private:
   void noteOn(int note, int velocity);
   void noteOff(int note, int velocity);
 
-  int getBestNewVoiceId(bool upper);
+  int getBestNewVoiceId(bool upper, int note);
   void claimVoice(int voiceId, bool upper, int note, int velocity);
-  void freeVoice(bool upper, int note, int velocity);
 };
 
 #endif

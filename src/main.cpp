@@ -16,12 +16,24 @@ SynthEngine synthEngine;
 Piano piano;
 
 void paramSlider(const char *name, int *ptr, unsigned char id, bool upper) {
+  if (synthEngine.patchMode == Whole && !upper)
+    ImGui::BeginDisabled();
+
   std::string concatName = name;
   concatName.append(upper ? "##UPPER" : "##LOWER");
+
   bool changed = ImGui::SliderInt(concatName.c_str(), ptr, 0, 127);
   if (changed) {
-    synthEngine.changeParam(upper, id, *ptr);
+    if (synthEngine.patchMode == Whole && upper) {
+      synthEngine.changeParam(true, id, *ptr);
+      synthEngine.changeParam(false, id, *ptr);
+    } else if (synthEngine.patchMode == Dual) {
+      synthEngine.changeParam(upper, id, *ptr);
+    }
   }
+
+  if (synthEngine.patchMode == Whole && !upper)
+    ImGui::EndDisabled();
 }
 
 void toneParams(int dest[], bool upper) {
@@ -123,28 +135,83 @@ void synthInitUI(bool *serialPortInited) {
   }
 }
 
+bool loadErrorModal = false;
+
+void openJx8pFile(int dest) {
+  nfdchar_t *outPath;
+  nfdfilteritem_t filterItem[2] = {{"Sysex", "syx"}};
+  nfdresult_t result = NFD_OpenDialog(&outPath, filterItem, 1, NULL);
+  if (result == NFD_OKAY) {
+    FILE *fd = fopen(outPath, "rb");
+
+    unsigned char fileData[67] = {0};
+    if (fread(fileData, 1, 67, fd) != 67) {
+      loadErrorModal = true;
+      printf("Invalid length\n");
+      NFD_FreePath(outPath);
+      return;
+    }
+
+    bool validHeader = true;
+    validHeader &= fileData[0] == 0xF0;
+    validHeader &= fileData[1] == 0x41;
+    validHeader &= fileData[2] == 0x35;
+    validHeader &= fileData[3] == 0x00;
+    if (!validHeader) {
+      loadErrorModal = true;
+      printf("Invalid header\n");
+      NFD_FreePath(outPath);
+      return;
+    }
+
+    if (dest == 0) {
+      synthEngine.patchMode = Whole;
+      for (size_t i = 0; i < 47; i++) {
+        unsigned char paramValue = fileData[i + 18];
+        synthEngine.toneU[i + 0x80] = paramValue;
+        synthEngine.toneL[i + 0x80] = paramValue;
+        synthEngine.changeParam(true, i + 0x80, paramValue);
+        synthEngine.changeParam(false, i + 0x80, paramValue);
+      }
+    } else if (dest == 1) {
+      synthEngine.patchMode = Dual;
+      for (size_t i = 0; i < 47; i++) {
+        unsigned char paramValue = fileData[i + 18];
+        synthEngine.toneU[i + 0x80] = paramValue;
+        synthEngine.changeParam(true, i + 0x80, paramValue);
+      }
+    } else if (dest == 2) {
+      synthEngine.patchMode = Dual;
+      for (size_t i = 0; i < 47; i++) {
+        unsigned char paramValue = fileData[i + 18];
+        synthEngine.toneL[i + 0x80] = paramValue;
+        synthEngine.changeParam(false, i + 0x80, paramValue);
+      }
+    }
+
+    NFD_FreePath(outPath);
+  } else {
+    printf("Error: %s\n", NFD_GetError());
+  }
+}
+
 int main(int argc, char *argv[]) {
   NFD_Init();
-
-  // nfdchar_t *outPath;
-  // nfdfilteritem_t filterItem[2] = {{"Source code", "c,cpp,cc"},
-  //                                  {"Headers", "h,hpp"}};
-  // nfdresult_t result = NFD_OpenDialog(&outPath, filterItem, 2, NULL);
-  // if (result == NFD_OKAY) {
-  //   puts("Success!");
-  //   puts(outPath);
-  //   NFD_FreePath(outPath);
-  // } else if (result == NFD_CANCEL) {
-  //   puts("User pressed cancel.");
-  // } else {
-  //   printf("Error: %s\n", NFD_GetError());
-  // }
 
   bool serialPortInited = false;
 
   HelloImGui::Run(
       [&] {
         // piano.draw();
+
+        if (ImGui::BeginPopupModal("ErrorModal", &loadErrorModal,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+          ImGui::Text("Error loading file!");
+          if (ImGui::Button("OK")) {
+            ImGui::CloseCurrentPopup();
+          }
+          ImGui::EndPopup();
+        }
 
         synthInitUI(&serialPortInited);
 
@@ -158,13 +225,42 @@ int main(int argc, char *argv[]) {
 
         int tempVal = 0;
         bool tempBool = 0;
-        ImGui::Combo("PATCH MODE", &tempVal, "WHOLE\0DUAL");
+        if (ImGui::Combo("PATCH MODE", (int *)&synthEngine.patchMode,
+                         "WHOLE\0DUAL\0")) {
+          synthEngine.resendAll();
+        }
+
         ImGui::Checkbox("PORTAMENTO ENABLE", &tempBool);
         ImGui::SliderInt("PORTAMENTO TIME", &tempVal, 0, 127);
         ImGui::SliderInt("BEND RANGE", &tempVal, 0, 127);
 
         ImGui::Combo("POLY MODE", (int *)&synthEngine.polyMode,
-                     "POLY 1\0POLY 2\0UNISON 1\0UNISON 2\0MONO 1\0MONO 2");
+                     "POLY 1\0POLY 2\0UNISON 1\0UNISON 2\0MONO 1\0MONO 2\0");
+
+        if (ImGui::Button("Open JX-8P Sysex File (whole)")) {
+          openJx8pFile(0);
+        }
+        if (ImGui::Button("Open JX-8P Sysex File (upper)")) {
+          openJx8pFile(1);
+        }
+        if (ImGui::Button("Open JX-8P Sysex File (lower)")) {
+          openJx8pFile(2);
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Voices Status");
+        ImGui::PlotHistogram(
+            "Upper",
+            [](void *data, int idx) {
+              return ((VoiceState *)data)[idx].on ? 1.0f : 0.0f;
+            },
+            synthEngine.voicesStateU, 6, 0, NULL, 0, 1);
+        ImGui::PlotHistogram(
+            "Lower",
+            [](void *data, int idx) {
+              return ((VoiceState *)data)[idx].on ? 1.0f : 0.0f;
+            },
+            synthEngine.voicesStateL, 6, 0, NULL, 0, 1);
 
         ImGui::TableNextColumn();
         ImGui::Text("Upper");
