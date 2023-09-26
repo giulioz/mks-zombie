@@ -3,6 +3,7 @@
 
 #include "serial/serial.h"
 #include <chrono>
+#include <iostream>
 #include <mutex>
 #include <portmidi.h>
 #include <thread>
@@ -37,10 +38,14 @@ private:
   int lastBoardSelected = 0x00;
   bool lastVoiceUpper = false;
 
+  int programmerLast[256] = {0};
+
   std::unique_ptr<serial::Serial> serialPort;
+  std::unique_ptr<serial::Serial> serialPortProgrammer;
   std::mutex serialFdMutex;
 
   std::unique_ptr<std::thread> synthThreadPtr;
+  std::unique_ptr<std::thread> programmerThreadPtr;
   bool running = false;
 
   PmStream *midiInStream;
@@ -48,6 +53,7 @@ private:
   bool initSerial(const serial::PortInfo &port);
   bool initPortMidi();
   void threadStart();
+  void programmerThreadStart();
 
   void noteOn(int note, int velocity);
   void noteOff(int note, int velocity);

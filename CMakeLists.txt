@@ -19,7 +19,6 @@ include_directories(deps/serial/include)
 set(SOURCE_FILES
 	"src/main.cpp"
 	"src/SynthEngine.cpp"
-	"src/Piano.cpp"
 )
 
 set(SERIAL_SOURCE_FILES

@@ -126,6 +126,11 @@ bool SynthEngine::init(const serial::PortInfo &port) {
   running = true;
   synthThreadPtr = std::make_unique<std::thread>([this] { threadStart(); });
 
+#ifdef PROGRAMMER_TEST
+  programmerThreadPtr =
+      std::make_unique<std::thread>([this] { programmerThreadStart(); });
+#endif
+
   return true;
 }
 
@@ -136,6 +141,12 @@ bool SynthEngine::initSerial(const serial::PortInfo &port) {
   serialPort->write(initLData, sizeof(initLData));
   serialPort->write(initUData, sizeof(initUData));
   serialPort->write(pianoPatchData, sizeof(pianoPatchData));
+
+#ifdef PROGRAMMER_TEST
+  serialPortProgrammer =
+      std::make_unique<serial::Serial>("/dev/tty.usbmodem2101", 115200);
+  serialPortProgrammer->setTimeout(10000, 10000, 10000, 10000, 10000);
+#endif
 
   return true;
 }
@@ -157,10 +168,55 @@ bool SynthEngine::initPortMidi() {
   return true;
 }
 
+static uint8_t programmerRedirTable[] = {
+    0x80, 0x81, 0x82, 0x85, 0x86, 0x87, 0x88, 0x89, 0x91, 0x92, 0x96,
+    0x97, 0x98, 0x9E, 0xAF, 0x9B, 0x83, 0x84, 0x8A, 0x8B, 0x93, 0x99,
+    0x9A, 0x8F, 0x90, 0x94, 0x95, 0x9C, 0x9D, 0xA1, 0xA2, 0xA3, 0xA4,
+    0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xA0, 0x9F,
+};
+
+void SynthEngine::programmerThreadStart() {
+  auto dl = " ";
+
+  while (running) {
+    // Read from programmer
+    auto progLine = serialPortProgrammer->readline();
+    if (!progLine.empty()) {
+      int start = 0;
+      int end = 0;
+      int pos = 0;
+      while ((start = progLine.find_first_not_of(dl, end)) !=
+             std::string::npos) {
+        end = progLine.find(dl, start);
+        auto substr = progLine.substr(start, end - start);
+
+        if (pos < 44) {
+          char *p;
+          int value = strtol(substr.c_str(), &p, 16);
+          // std::cout << value << std::endl;
+
+          int id = programmerRedirTable[pos];
+          toneU[id] = value;
+
+          if (programmerLast[id] != value) {
+            programmerLast[id] = value;
+            changeParam(false, id, value);
+            changeParam(true, id, value);
+            printf("Changed %d=%d\n", id, value);
+          }
+        }
+
+        pos += 1;
+      }
+    }
+  }
+}
+
 void SynthEngine::threadStart() {
   PmEvent event;
 
   while (running) {
+
     // Read from virtual port
     int length = Pm_Read(midiInStream, &event, 1);
     if (length == 0) {
@@ -170,11 +226,8 @@ void SynthEngine::threadStart() {
     if (Pm_MessageStatus(event.message) == 0x80 ||
         (Pm_MessageStatus(event.message) == 0x90 &&
          Pm_MessageData2(event.message) == 0)) {
-      // piano.up(Pm_MessageData1(event.message));
       noteOff(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
     } else if (Pm_MessageStatus(event.message) == 0x90) {
-      // piano.down(Pm_MessageData1(event.message),
-      // Pm_MessageData2(event.message));
       noteOn(Pm_MessageData1(event.message), Pm_MessageData2(event.message));
     } else if (Pm_MessageStatus(event.message) == 0xB0) {
       int controlChange = Pm_MessageData1(event.message);

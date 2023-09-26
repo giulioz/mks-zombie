@@ -6,17 +6,15 @@
 #include <stdio.h>
 #include <string>
 
-#include "Piano.h"
 #include "SynthEngine.h"
 #include "SynthParams.h"
 
 bool done = false;
 SynthEngine synthEngine;
 
-Piano piano;
-
-void paramSlider(const char *name, int *ptr, unsigned char id, bool upper) {
-  if (synthEngine.patchMode == Whole && !upper)
+void paramSlider(const char *name, int *ptr, unsigned char id, bool upper,
+                 bool ignoreMode = false) {
+  if (synthEngine.patchMode == Whole && !upper && !ignoreMode)
     ImGui::BeginDisabled();
 
   std::string concatName = name;
@@ -24,15 +22,15 @@ void paramSlider(const char *name, int *ptr, unsigned char id, bool upper) {
 
   bool changed = ImGui::SliderInt(concatName.c_str(), ptr, 0, 127);
   if (changed) {
-    if (synthEngine.patchMode == Whole && upper) {
+    if ((synthEngine.patchMode == Whole && !ignoreMode) && upper) {
       synthEngine.changeParam(true, id, *ptr);
       synthEngine.changeParam(false, id, *ptr);
-    } else if (synthEngine.patchMode == Dual) {
+    } else if (synthEngine.patchMode == Dual || ignoreMode) {
       synthEngine.changeParam(upper, id, *ptr);
     }
   }
 
-  if (synthEngine.patchMode == Whole && !upper)
+  if (synthEngine.patchMode == Whole && !upper && !ignoreMode)
     ImGui::EndDisabled();
 }
 
@@ -202,8 +200,6 @@ int main(int argc, char *argv[]) {
 
   HelloImGui::Run(
       [&] {
-        // piano.draw();
-
         if (ImGui::BeginPopupModal("ErrorModal", &loadErrorModal,
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
           ImGui::Text("Error loading file!");
@@ -223,19 +219,19 @@ int main(int argc, char *argv[]) {
         ImGui::Separator();
         ImGui::Text("Patch");
 
-        int tempVal = 0;
-        bool tempBool = 0;
         if (ImGui::Combo("PATCH MODE", (int *)&synthEngine.patchMode,
                          "WHOLE\0DUAL\0")) {
           synthEngine.resendAll();
         }
 
-        ImGui::Checkbox("PORTAMENTO ENABLE", &tempBool);
-        ImGui::SliderInt("PORTAMENTO TIME", &tempVal, 0, 127);
-        ImGui::SliderInt("BEND RANGE", &tempVal, 0, 127);
+        // int tempVal = 0;
+        // bool tempBool = 0;
+        // ImGui::Checkbox("PORTAMENTO ENABLE", &tempBool);
+        // ImGui::SliderInt("PORTAMENTO TIME", &tempVal, 0, 127);
+        // ImGui::SliderInt("BEND RANGE", &tempVal, 0, 127);
 
-        ImGui::Combo("POLY MODE", (int *)&synthEngine.polyMode,
-                     "POLY 1\0POLY 2\0UNISON 1\0UNISON 2\0MONO 1\0MONO 2\0");
+        // ImGui::Combo("POLY MODE", (int *)&synthEngine.polyMode,
+        //              "POLY 1\0POLY 2\0UNISON 1\0UNISON 2\0MONO 1\0MONO 2\0");
 
         if (ImGui::Button("Open JX-8P Sysex File (whole)")) {
           openJx8pFile(0);
@@ -261,6 +257,13 @@ int main(int argc, char *argv[]) {
               return ((VoiceState *)data)[idx].on ? 1.0f : 0.0f;
             },
             synthEngine.voicesStateL, 6, 0, NULL, 0, 1);
+
+        ImGui::Separator();
+        ImGui::Text("Upper/Lower detune");
+        paramSlider("UPPER_B4", &synthEngine.toneU[0xB4], 0xB4, true, true);
+        paramSlider("UPPER_BE", &synthEngine.toneU[0xBE], 0xBE, true, true);
+        paramSlider("LOWER_B4", &synthEngine.toneL[0xB4], 0xB4, false, true);
+        paramSlider("LOWER_BE", &synthEngine.toneL[0xBE], 0xBE, false, true);
 
         ImGui::TableNextColumn();
         ImGui::Text("Upper");
